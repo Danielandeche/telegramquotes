@@ -1,83 +1,98 @@
-import time
-import random
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+import schedule
+import time
 from datetime import datetime
+import threading
 
-# --- CONFIG ---
+# Bot token and group ID
 TOKEN = "8225529337:AAFYdTwJVTTLC1RvwiYrkzI9jcV-VpCiADM"
-GROUP_ID = -1001829852593   # Binarytools group
+GROUP_ID = -1001829852593
 bot = telebot.TeleBot(TOKEN)
 
-# --- QUOTES & STRATEGIES ---
+# Store last message ID so we can delete it
+last_message_id = None
+
+# Trading quotes/strategies/advice
 quotes = [
-    "📈 *Discipline is the bridge between goals and trading success.*",
-    "💡 *In Binary Trading, consistency beats intensity.*",
-    "🚀 *Trade the trend, not your emotions.*",
-    "📊 *A good trader controls risk before chasing profits.*",
-    "🔥 *Losses are tuition fees for learning. Learn and move forward.*",
-    "⚡ *Overtrading is the enemy. Patience is the weapon.*",
-    "🎯 *Focus on strategies, not on luck.*",
-    "💎 *Your edge in trading is discipline, not predictions.*",
-    "🧠 *Emotions can ruin the best strategy. Stay calm, trade smart.*",
+    "📈 Success in trading comes from discipline, not luck.",
+    "💡 A good strategy beats emotions every time.",
+    "⚡ Small consistent profits > Big occasional wins.",
+    "📊 In binary trading, patience and timing are everything.",
+    "💎 Manage your risk before chasing rewards.",
+    "🔥 Don’t just trade… Trade with a strategy.",
+    "🎯 Stick to your trading plan no matter what.",
+    "🧠 The best traders are masters of psychology.",
 ]
 
-# --- POLL QUESTIONS ---
+# Poll questions
 polls = [
-    {
-        "question": "📊 Which strategy do you prefer?",
-        "options": ["Even/Odd", "Rise/Fall", "Over/Under", "Matches/Differs"]
-    },
-    {
-        "question": "💡 How many trades do you take daily?",
-        "options": ["1-5", "6-10", "11-20", "20+"]
-    },
-    {
-        "question": "🔥 What's your biggest trading challenge?",
-        "options": ["Discipline", "Emotions", "Strategy", "Risk Management"]
-    },
-    {
-        "question": "🚀 Do you trade mostly on:",
-        "options": ["Demo Account", "Real Account"]
-    },
+    ("Which trading style do you prefer?", ["Scalping", "Day Trading", "Swing Trading", "Long-Term"]),
+    ("Which is harder in trading?", ["Finding entries", "Risk management", "Controlling emotions"]),
+    ("How do you decide stake size?", ["Fixed stake", "Martingale", "Percentage of balance"]),
+    ("Which Deriv strategy works best for you?", ["Over/Under", "Rise/Fall", "Even/Odd", "Differ/Matches"]),
 ]
 
-# --- Send Quote ---
-def send_quote():
-    quote = random.choice(quotes)
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("🌐 Visit Binarytool Today", url="https://app.binarytool.site/"))
-    bot.send_message(GROUP_ID, f"{quote}", reply_markup=markup, parse_mode="Markdown")
+quote_index = 0
+poll_index = 0
 
-# --- Send Poll ---
+# Function to send quotes with button
+def send_quote():
+    global last_message_id, quote_index
+
+    # Delete previous message
+    if last_message_id:
+        try:
+            bot.delete_message(GROUP_ID, last_message_id)
+        except Exception as e:
+            print(f"Error deleting message: {e}")
+
+    # Pick quote
+    quote = quotes[quote_index % len(quotes)]
+    quote_index += 1
+
+    # Inline button
+    markup = telebot.types.InlineKeyboardMarkup()
+    btn = telebot.types.InlineKeyboardButton(
+        "🚀 Visit Binarytool Today 🌍", url="https://app.binarytool.site/"
+    )
+    markup.add(btn)
+
+    # Send styled message
+    msg = bot.send_message(
+        GROUP_ID,
+        f"✨ *Trading Motivation & Strategy* ✨\n\n{quote}\n\nStay disciplined, stay profitable 💹",
+        parse_mode="Markdown",
+        reply_markup=markup,
+    )
+    last_message_id = msg.message_id
+
+# Function to send polls
 def send_poll():
-    poll = random.choice(polls)
+    global poll_index
+    question, options = polls[poll_index % len(polls)]
+    poll_index += 1
+
     bot.send_poll(
         GROUP_ID,
-        poll["question"],
-        poll["options"],
+        question,
+        options,
         is_anonymous=False,
-        allows_multiple_answers=False
+        type="regular",
+        open_period=1800,  # 30 minutes
     )
 
-# --- Scheduler ---
-def run_scheduler():
+# Schedule tasks (every 10 mins for quotes, every 30 mins for polls)
+schedule.every(10).minutes.at(":00").do(send_quote)
+schedule.every(30).minutes.at(":00").do(send_poll)
+
+# Run schedule
+def run_schedule():
     while True:
-        now = datetime.now()
-        minute = now.minute
-        second = now.second
-
-        # Every 10 minutes (00, 10, 20, 30, 40, 50)
-        if minute % 10 == 0 and second == 0:
-            send_quote()
-
-        # Every 30 minutes (00, 30)
-        if minute % 30 == 0 and second == 5:  # slight delay to not clash with quotes
-            send_poll()
-
+        schedule.run_pending()
         time.sleep(1)
 
-# --- Start Bot ---
-if __name__ == "__main__":
-    print("🚀 Bot is running...")
-    run_scheduler()
+# Start thread
+threading.Thread(target=run_schedule).start()
+
+print("🤖 Bot is running...")
+bot.infinity_polling()
