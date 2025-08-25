@@ -1,10 +1,14 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application
-import random, asyncio
+import random
+import datetime
 
 # === Your details ===
 BOT_TOKEN = "8225529337:AAFYdTwJVTTLC1RvwiYrkzI9jcV-VpCiADM"
 GROUP_ID = -1001829852593  # group id
+
+# Keep track of last sent message
+last_message_id = None
 
 # === Deriv / Binary Trading Quotes & Strategies ===
 quotes = [
@@ -25,26 +29,41 @@ def get_button():
     keyboard = [[InlineKeyboardButton("🚀 Visit Binarytool Today 🚀", url="https://app.binarytool.site/")]]
     return InlineKeyboardMarkup(keyboard)
 
-# === Send Random Quote ===
-async def send_quote(app: Application):
-    while True:
-        quote = random.choice(quotes)
-        await app.bot.send_message(
-            chat_id=GROUP_ID,
-            text=quote,
-            reply_markup=get_button(),
-            parse_mode="Markdown"
-        )
-        await asyncio.sleep(1800)  # 30 minutes (1800 seconds)
+# === Job to send a random quote ===
+async def send_quote(context):
+    global last_message_id
+
+    # Delete previous message if exists
+    if last_message_id:
+        try:
+            await context.bot.delete_message(chat_id=GROUP_ID, message_id=last_message_id)
+        except Exception as e:
+            print(f"⚠️ Could not delete previous message: {e}")
+
+    # Send new message
+    quote = random.choice(quotes)
+    msg = await context.bot.send_message(
+        chat_id=GROUP_ID,
+        text=quote,
+        reply_markup=get_button(),
+        parse_mode="Markdown"
+    )
+
+    # Store last message ID
+    last_message_id = msg.message_id
 
 # === Main ===
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Start auto-scheduler
-    app.job_queue.run_once(lambda _: asyncio.create_task(send_quote(app)), when=0)
+    # Schedule job every 10 minutes, aligned with clock (00,10,20,30,40,50)
+    app.job_queue.run_repeating(
+        send_quote,
+        interval=600,  # 10 minutes
+        first=datetime.timedelta(seconds=0)  # start aligned
+    )
 
-    print("🤖 Bot is running... sending quotes every 30 minutes.")
+    print("🤖 Bot is running... sending quotes every 10 minutes (aligned with the clock).")
     app.run_polling()
 
 if __name__ == "__main__":
