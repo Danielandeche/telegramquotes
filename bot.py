@@ -1,94 +1,83 @@
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Poll
-from telegram.ext import Application
+import time
 import random
-import datetime
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from datetime import datetime
 
-# === Your details ===
-BOT_TOKEN = "8225529337:AAFYdTwJVTTLC1RvwiYrkzI9jcV-VpCiADM"
-GROUP_ID = -1001829852593  # group id
+# --- CONFIG ---
+TOKEN = "8225529337:AAFYdTwJVTTLC1RvwiYrkzI9jcV-VpCiADM"
+GROUP_ID = -1001829852593   # Binarytools group
+bot = telebot.TeleBot(TOKEN)
 
-# Keep track of last sent message & poll
-last_message_id = None
-last_poll_id = None
-
-# === Stylish Quotes ===
+# --- QUOTES & STRATEGIES ---
 quotes = [
-    "✨ *Trading Tip*: _Risk management is the holy grail of trading._ Never risk more than 2% of your balance per trade.",
-    "💡 *Strategy Insight*: _Patience is power._ Wait for clear setups before pulling the trigger.",
-    "🚀 *Motivation*: Every great trader was once a beginner. Stay consistent and disciplined.",
-    "📈 *Advice*: A losing trade doesn’t define you. Learn, adapt, and improve for the next opportunity.",
-    "🔥 *Binary Hack*: Always back-test your strategy on a demo before risking real money.",
-    "🧠 *Wisdom*: Trading is 80% psychology and 20% strategy. _Master your emotions first._",
-    "🎯 *Pro Tip*: Focus on one market at a time. Mastery beats mediocrity across many.",
-    "⚡ *Quick Strategy*: In volatile markets, short-term contracts (1–5 ticks) can capture quick moves.",
-    "💎 *Reminder*: Success in trading is not about being right, it’s about *making money when you’re right*.",
-    "📊 *Binary Strategy*: Use Even/Odd or Over/Under contracts for quick probability-based trades."
+    "📈 *Discipline is the bridge between goals and trading success.*",
+    "💡 *In Binary Trading, consistency beats intensity.*",
+    "🚀 *Trade the trend, not your emotions.*",
+    "📊 *A good trader controls risk before chasing profits.*",
+    "🔥 *Losses are tuition fees for learning. Learn and move forward.*",
+    "⚡ *Overtrading is the enemy. Patience is the weapon.*",
+    "🎯 *Focus on strategies, not on luck.*",
+    "💎 *Your edge in trading is discipline, not predictions.*",
+    "🧠 *Emotions can ruin the best strategy. Stay calm, trade smart.*",
 ]
 
-# === Poll Options ===
-poll_questions = [
-    ("Which do you prefer?", ["Even/Odd", "Over/Under", "Rise/Fall", "Matches/Differs"]),
-    ("What’s your trading style?", ["Scalping", "Day Trading", "Swing", "Long-term"]),
-    ("How do you manage risk?", ["Stop Loss", "Martingale", "Fixed %", "No Risk Plan 😅"]),
-    ("Which market do you trust most?", ["Crash/BOOM", "Volatility Index", "Synthetic R_100", "Forex"]),
+# --- POLL QUESTIONS ---
+polls = [
+    {
+        "question": "📊 Which strategy do you prefer?",
+        "options": ["Even/Odd", "Rise/Fall", "Over/Under", "Matches/Differs"]
+    },
+    {
+        "question": "💡 How many trades do you take daily?",
+        "options": ["1-5", "6-10", "11-20", "20+"]
+    },
+    {
+        "question": "🔥 What's your biggest trading challenge?",
+        "options": ["Discipline", "Emotions", "Strategy", "Risk Management"]
+    },
+    {
+        "question": "🚀 Do you trade mostly on:",
+        "options": ["Demo Account", "Real Account"]
+    },
 ]
 
-# === Build Inline Button ===
-def get_button():
-    keyboard = [[InlineKeyboardButton("🚀 Visit Binarytool Today 🚀", url="https://app.binarytool.site/")]]
-    return InlineKeyboardMarkup(keyboard)
-
-# === Job to send a random stylish quote & poll ===
-async def send_quote(context):
-    global last_message_id, last_poll_id
-
-    # Delete previous message if exists
-    if last_message_id:
-        try:
-            await context.bot.delete_message(chat_id=GROUP_ID, message_id=last_message_id)
-        except Exception as e:
-            print(f"⚠️ Could not delete previous message: {e}")
-
-    # Close previous poll if exists
-    if last_poll_id:
-        try:
-            await context.bot.stop_poll(chat_id=GROUP_ID, message_id=last_poll_id)
-        except Exception as e:
-            print(f"⚠️ Could not close previous poll: {e}")
-
-    # Send stylish quote
+# --- Send Quote ---
+def send_quote():
     quote = random.choice(quotes)
-    msg = await context.bot.send_message(
-        chat_id=GROUP_ID,
-        text=f"💬 {quote}\n\n🔗 _Stay sharp, stay disciplined!_",
-        reply_markup=get_button(),
-        parse_mode="Markdown"
-    )
-    last_message_id = msg.message_id
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("🌐 Visit Binarytool Today", url="https://app.binarytool.site/"))
+    bot.send_message(GROUP_ID, f"{quote}", reply_markup=markup, parse_mode="Markdown")
 
-    # Send poll after the quote
-    poll_q, poll_opts = random.choice(poll_questions)
-    poll = await context.bot.send_poll(
-        chat_id=GROUP_ID,
-        question=f"📊 {poll_q}",
-        options=poll_opts,
-        is_anonymous=True
-    )
-    last_poll_id = poll.message_id
-
-# === Main ===
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
-
-    # Schedule job every 10 minutes
-    app.job_queue.run_repeating(
-        send_quote,
-        interval=600,  # 10 minutes
-        first=datetime.timedelta(seconds=0)
+# --- Send Poll ---
+def send_poll():
+    poll = random.choice(polls)
+    bot.send_poll(
+        GROUP_ID,
+        poll["question"],
+        poll["options"],
+        is_anonymous=False,
+        allows_multiple_answers=False
     )
 
-    print("🤖 Bot is running... sending stylish quotes + polls every 10 minutes.")
-    app.run_polling()
+# --- Scheduler ---
+def run_scheduler():
+    while True:
+        now = datetime.now()
+        minute = now.minute
+        second = now.second
 
+        # Every 10 minutes (00, 10, 20, 30, 40, 50)
+        if minute % 10 == 0 and second == 0:
+            send_quote()
+
+        # Every 30 minutes (00, 30)
+        if minute % 30 == 0 and second == 5:  # slight delay to not clash with quotes
+            send_poll()
+
+        time.sleep(1)
+
+# --- Start Bot ---
 if __name__ == "__main__":
-    main()
+    print("🚀 Bot is running...")
+    run_scheduler()
