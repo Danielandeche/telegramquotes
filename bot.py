@@ -28,29 +28,18 @@ MARKET_NAMES = {
 # Store last 100 ticks for analysis
 market_ticks = {market: [] for market in MARKETS}
 
-# Track last message ID for deleting
-last_message_id = None
+# Track active message IDs
+active_messages = []
 
 
-def send_telegram_message(message: str, image_path="logo.png"):
-    """Send a message with logo and Run button, delete old one if exists."""
-    global last_message_id
-
-    # Delete previous message
-    if last_message_id:
-        requests.post(f"{BASE_URL}/deleteMessage", data={
-            "chat_id": GROUP_ID,
-            "message_id": last_message_id
-        })
-
-    # Inline button
+def send_telegram_message(message: str, image_path="logo.png", keep=False):
+    """Send a message with logo and Run button."""
     keyboard = {
         "inline_keyboard": [[
             {"text": "🚀 Run on KashyTrader", "url": "https://www.kashytrader.site/"}
         ]]
     }
 
-    # Send photo with caption
     with open(image_path, "rb") as img:
         resp = requests.post(
             f"{BASE_URL}/sendPhoto",
@@ -64,7 +53,22 @@ def send_telegram_message(message: str, image_path="logo.png"):
         )
 
     if resp.ok:
-        last_message_id = resp.json()["result"]["message_id"]
+        msg_id = resp.json()["result"]["message_id"]
+        if not keep:  # only track if it should be auto-deleted
+            active_messages.append(msg_id)
+        return msg_id
+    return None
+
+
+def delete_messages():
+    """Delete tracked messages."""
+    global active_messages
+    for msg_id in active_messages:
+        requests.post(f"{BASE_URL}/deleteMessage", data={
+            "chat_id": GROUP_ID,
+            "message_id": msg_id
+        })
+    active_messages = []
 
 
 def analyze_market(market: str, ticks: list):
@@ -111,12 +115,12 @@ def fetch_and_analyze():
     if best_market:
         now = datetime.now()
         entry_time = now + timedelta(minutes=1)
-        expiry_time = now + timedelta(minutes=4)  # 1m pre + 3m duration
+        expiry_time = now + timedelta(minutes=4)
         next_signal_time = now + timedelta(minutes=10)
 
         market_name = MARKET_NAMES.get(best_market, best_market)
 
-        # Pre-notification
+        # -------- PRE-NOTIFICATION --------
         pre_msg = (
             f"📢 <b>Upcoming Signal Alert</b>\n\n"
             f"⏰ Entry in <b>1 minute</b>\n"
@@ -125,28 +129,34 @@ def fetch_and_analyze():
             f"⚡ Get ready!"
         )
         send_telegram_message(pre_msg)
-        time.sleep(20)
+        time.sleep(6)
 
-        # Main signal
+        # -------- MAIN SIGNAL --------
+        entry_digit = int(str(market_ticks[best_market][-1])[-1]) if market_ticks[best_market] else None
         main_msg = (
             f"⚡ <b>KashyTrader Premium Signal</b>\n\n"
             f"⏰ Time: {entry_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"📊 Market: {market_name}\n"
             f"🎯 Signal: <b>{best_signal}</b>\n"
+            f"🔢 Entry Point Digit: <b>{entry_digit}</b>\n"
             f"📈 Confidence: <b>{best_confidence:.2%}</b>\n\n"
             f"🔥 Execute now!"
         )
         send_telegram_message(main_msg)
-        time.sleep(80)
+        time.sleep(90)  # wait 3 mins until expiration
 
-        # Post-notification
+        # -------- POST-NOTIFICATION --------
         post_msg = (
             f"✅ <b>Signal Expired</b>\n\n"
             f"📊 Market: {market_name}\n"
             f"🕒 Expired at: {expiry_time.strftime('%H:%M:%S')}\n\n"
             f"🔔 Next Signal Expected: {next_signal_time.strftime('%H:%M:%S')}"
         )
-        send_telegram_message(post_msg)
+        send_telegram_message(post_msg, keep=True)
+
+        # -------- CLEANUP OLD MESSAGES --------
+        time.sleep(10)  # wait 30s after expiration
+        delete_messages()  # delete pre + main only
 
 
 def on_message(ws, message):
