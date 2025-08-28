@@ -3,7 +3,7 @@ import requests
 import json
 import websocket
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Telegram bot credentials
 TOKEN = "8225529337:AAFYdTwJVTTLC1RvwiYrkzI9jcV-VpCiADM"
@@ -32,8 +32,8 @@ market_ticks = {market: [] for market in MARKETS}
 last_message_id = None
 
 
-def send_telegram_message(message: str):
-    """Send a message to Telegram with Run button, delete old one if exists."""
+def send_telegram_message(message: str, image_path="logo.png"):
+    """Send a message with logo and Run button, delete old one if exists."""
     global last_message_id
 
     # Delete previous message
@@ -50,14 +50,19 @@ def send_telegram_message(message: str):
         ]]
     }
 
-    payload = {
-        "chat_id": GROUP_ID,
-        "text": message,
-        "parse_mode": "HTML",
-        "reply_markup": json.dumps(keyboard)
-    }
+    # Send photo with caption
+    with open(image_path, "rb") as img:
+        resp = requests.post(
+            f"{BASE_URL}/sendPhoto",
+            data={
+                "chat_id": GROUP_ID,
+                "caption": message,
+                "parse_mode": "HTML",
+                "reply_markup": json.dumps(keyboard),
+            },
+            files={"photo": img}
+        )
 
-    resp = requests.post(f"{BASE_URL}/sendMessage", data=payload)
     if resp.ok:
         last_message_id = resp.json()["result"]["message_id"]
 
@@ -88,7 +93,7 @@ def analyze_market(market: str, ticks: list):
 
 
 def fetch_and_analyze():
-    """Pick the best market and send a signal every 10 minutes."""
+    """Pick the best market and send full signal cycle."""
     best_market = None
     best_signal = None
     best_confidence = 0
@@ -104,18 +109,44 @@ def fetch_and_analyze():
                     best_market = market
 
     if best_market:
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = datetime.now()
+        entry_time = now + timedelta(minutes=1)
+        expiry_time = now + timedelta(minutes=4)  # 1m pre + 3m duration
+        next_signal_time = now + timedelta(minutes=10)
+
         market_name = MARKET_NAMES.get(best_market, best_market)
 
-        message = (
-            f"⚡ <b>KashyTrader Premium Signal</b>\n\n"
-            f"⏰ <b>Time:</b> {now}\n"
-            f"📊 <b>Market:</b> {market_name}\n"
-            f"🎯 <b>Signal:</b> {best_signal}\n"
-            f"📈 <b>Confidence:</b> {best_confidence:.2%}\n\n"
-            f"🔥 Stay disciplined & trade smart!"
+        # Pre-notification
+        pre_msg = (
+            f"📢 <b>Upcoming Signal Alert</b>\n\n"
+            f"⏰ Entry in <b>1 minute</b>\n"
+            f"📊 Market: {market_name}\n"
+            f"🕒 Entry Time: {entry_time.strftime('%H:%M:%S')}\n\n"
+            f"⚡ Get ready!"
         )
-        send_telegram_message(message)
+        send_telegram_message(pre_msg)
+        time.sleep(20)
+
+        # Main signal
+        main_msg = (
+            f"⚡ <b>KashyTrader Premium Signal</b>\n\n"
+            f"⏰ Time: {entry_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"📊 Market: {market_name}\n"
+            f"🎯 Signal: <b>{best_signal}</b>\n"
+            f"📈 Confidence: <b>{best_confidence:.2%}</b>\n\n"
+            f"🔥 Execute now!"
+        )
+        send_telegram_message(main_msg)
+        time.sleep(80)
+
+        # Post-notification
+        post_msg = (
+            f"✅ <b>Signal Expired</b>\n\n"
+            f"📊 Market: {market_name}\n"
+            f"🕒 Expired at: {expiry_time.strftime('%H:%M:%S')}\n\n"
+            f"🔔 Next Signal Expected: {next_signal_time.strftime('%H:%M:%S')}"
+        )
+        send_telegram_message(post_msg)
 
 
 def on_message(ws, message):
@@ -151,7 +182,7 @@ def schedule_signals():
     """Send signals every 10 minutes."""
     while True:
         fetch_and_analyze()
-        time.sleep(20)  # 10 minutes
+        time.sleep(60)  # 10 minutes
 
 
 if __name__ == "__main__":
