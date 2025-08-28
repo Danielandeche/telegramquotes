@@ -75,7 +75,7 @@ def fetch_and_analyze():
     if best_market:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         message = (
-            f"📊 <b>Deriv Trading Signal</b>\n\n"
+            f"📊 <b>BinaryTrading Signal</b>\n\n"
             f"⏰ Time: {now}\n"
             f"🛒 Market: <b>{best_market}</b>\n"
             f"🎯 Signal: <b>{best_signal.upper()}</b>\n"
@@ -118,7 +118,7 @@ def schedule_signals():
     """Send signals every 10 minutes."""
     while True:
         fetch_and_analyze()
-        time.sleep(20)  # 10 minutes
+        time.sleep(600)  # 10 minutes
 
 
 if __name__ == "__main__":
