@@ -158,7 +158,7 @@ def fetch_and_analyze():
              f"⚡ Get ready!"
         )
         send_telegram_message(pre_msg)
-        time.sleep(30)
+        time.sleep(60)
 
         # -------- MAIN SIGNAL --------
         entry_digit = int(str(market_ticks[best_market][-1])[-1]) if market_ticks[best_market] else None
@@ -174,7 +174,7 @@ def fetch_and_analyze():
             f"🔥 Execute now!"
         )
         send_telegram_message(main_msg)
-        time.sleep(90)  # 3 mins duration
+        time.sleep(180)  # 3 mins duration
 
         # -------- POST-NOTIFICATION --------
         post_msg = (
@@ -186,7 +186,7 @@ def fetch_and_analyze():
         last_expired_id = send_telegram_message(post_msg, keep=True)
 
         # -------- CLEANUP OLD MESSAGES --------
-        time.sleep(10)
+        time.sleep(30)
         delete_messages()
 
 
