@@ -153,11 +153,9 @@ def fetch_and_analyze():
 
         # -------- PRE-NOTIFICATION --------
         pre_msg = (
-            f"📢 <b>Upcoming Signal Alert</b>\n\n"
-            f"⏰ Entry in <b>1 minute</b>\n"
-            f"📊 Market: {market_name}\n"
-            f"🕒 Entry Time: {entry_time.strftime('%H:%M:%S')}\n\n"
-            f"⚡ Get ready!"
+             f"📢 <b>Upcoming Signal Alert</b>\n\n"
+             f"⏰ Entry in <b>1 minute</b>\n\n"
+             f"⚡ Get ready!"
         )
         send_telegram_message(pre_msg)
         time.sleep(30)
