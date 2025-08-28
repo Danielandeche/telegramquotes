@@ -7,8 +7,8 @@ from datetime import datetime
 
 # Telegram bot credentials
 TOKEN = "8225529337:AAFYdTwJVTTLC1RvwiYrkzI9jcV-VpCiADM"
-GROUP_ID = -1001829852593
-TELEGRAM_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+GROUP_ID = -1002776818122
+BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
 
 # Deriv API WebSocket endpoint
 DERIV_API_URL = "wss://ws.binaryws.com/websockets/v3?app_id=1089"
@@ -16,18 +16,50 @@ DERIV_API_URL = "wss://ws.binaryws.com/websockets/v3?app_id=1089"
 # Markets to analyze
 MARKETS = ["R_10", "R_25", "R_50", "R_75", "R_100"]
 
+# Market symbol to name mapping
+MARKET_NAMES = {
+    "R_10": "Volatility 10 Index",
+    "R_25": "Volatility 25 Index",
+    "R_50": "Volatility 50 Index",
+    "R_75": "Volatility 75 Index",
+    "R_100": "Volatility 100 Index",
+}
+
 # Store last 100 ticks for analysis
 market_ticks = {market: [] for market in MARKETS}
 
+# Track last message ID for deleting
+last_message_id = None
+
 
 def send_telegram_message(message: str):
-    """Send a message to the Telegram group/channel."""
+    """Send a message to Telegram with Run button, delete old one if exists."""
+    global last_message_id
+
+    # Delete previous message
+    if last_message_id:
+        requests.post(f"{BASE_URL}/deleteMessage", data={
+            "chat_id": GROUP_ID,
+            "message_id": last_message_id
+        })
+
+    # Inline button
+    keyboard = {
+        "inline_keyboard": [[
+            {"text": "🚀 Run on KashyTrader", "url": "https://www.kashytrader.site/"}
+        ]]
+    }
+
     payload = {
         "chat_id": GROUP_ID,
         "text": message,
-        "parse_mode": "HTML"
+        "parse_mode": "HTML",
+        "reply_markup": json.dumps(keyboard)
     }
-    requests.post(TELEGRAM_URL, data=payload)
+
+    resp = requests.post(f"{BASE_URL}/sendMessage", data=payload)
+    if resp.ok:
+        last_message_id = resp.json()["result"]["message_id"]
 
 
 def analyze_market(market: str, ticks: list):
@@ -43,10 +75,10 @@ def analyze_market(market: str, ticks: list):
     under6_count = sum(1 for d in last_digits if d < 6)
 
     strength = {
-        "even": even_count / len(last_digits),
-        "odd": odd_count / len(last_digits),
-        "over3": over3_count / len(last_digits),
-        "under6": under6_count / len(last_digits),
+        "Even": even_count / len(last_digits),
+        "Odd": odd_count / len(last_digits),
+        "Over 3": over3_count / len(last_digits),
+        "Under 6": under6_count / len(last_digits),
     }
 
     best_signal = max(strength, key=strength.get)
@@ -57,7 +89,6 @@ def analyze_market(market: str, ticks: list):
 
 def fetch_and_analyze():
     """Pick the best market and send a signal every 10 minutes."""
-
     best_market = None
     best_signal = None
     best_confidence = 0
@@ -74,13 +105,15 @@ def fetch_and_analyze():
 
     if best_market:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        market_name = MARKET_NAMES.get(best_market, best_market)
+
         message = (
-            f"📊 <b>BinaryTrading Signal</b>\n\n"
-            f"⏰ Time: {now}\n"
-            f"🛒 Market: <b>{best_market}</b>\n"
-            f"🎯 Signal: <b>{best_signal.upper()}</b>\n"
-            f"📈 Confidence: {best_confidence:.2%}\n\n"
-            f"⚡ Trade wisely!"
+            f"⚡ <b>KashyTrader Premium Signal</b>\n\n"
+            f"⏰ <b>Time:</b> {now}\n"
+            f"📊 <b>Market:</b> {market_name}\n"
+            f"🎯 <b>Signal:</b> {best_signal}\n"
+            f"📈 <b>Confidence:</b> {best_confidence:.2%}\n\n"
+            f"🔥 Stay disciplined & trade smart!"
         )
         send_telegram_message(message)
 
@@ -118,7 +151,7 @@ def schedule_signals():
     """Send signals every 10 minutes."""
     while True:
         fetch_and_analyze()
-        time.sleep(600)  # 10 minutes
+        time.sleep(20)  # 10 minutes
 
 
 if __name__ == "__main__":
