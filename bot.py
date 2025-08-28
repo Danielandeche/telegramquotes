@@ -4,6 +4,7 @@ import json
 import websocket
 import threading
 from datetime import datetime, timedelta
+import statistics
 
 # Telegram bot credentials
 TOKEN = "8225529337:AAFYdTwJVTTLC1RvwiYrkzI9jcV-VpCiADM"
@@ -25,11 +26,12 @@ MARKET_NAMES = {
     "R_100": "Volatility 100 Index",
 }
 
-# Store last 100 ticks for analysis
+# Store last 200 ticks for analysis
 market_ticks = {market: [] for market in MARKETS}
 
-# Track active message IDs
+# Track message IDs
 active_messages = []
+last_expired_id = None
 
 
 def send_telegram_message(message: str, image_path="logo.png", keep=False):
@@ -54,14 +56,14 @@ def send_telegram_message(message: str, image_path="logo.png", keep=False):
 
     if resp.ok:
         msg_id = resp.json()["result"]["message_id"]
-        if not keep:  # only track if it should be auto-deleted
+        if not keep:
             active_messages.append(msg_id)
         return msg_id
     return None
 
 
 def delete_messages():
-    """Delete tracked messages."""
+    """Delete pre+main messages from last cycle."""
     global active_messages
     for msg_id in active_messages:
         requests.post(f"{BASE_URL}/deleteMessage", data={
@@ -71,23 +73,49 @@ def delete_messages():
     active_messages = []
 
 
+def delete_last_expired():
+    """Delete last expired message before sending a new cycle."""
+    global last_expired_id
+    if last_expired_id:
+        requests.post(f"{BASE_URL}/deleteMessage", data={
+            "chat_id": GROUP_ID,
+            "message_id": last_expired_id
+        })
+        last_expired_id = None
+
+
 def analyze_market(market: str, ticks: list):
-    """Analyze market ticks for even/odd, over 3, under 6."""
-    if len(ticks) < 20:
+    """
+    Improved analysis:
+      - Even / Odd distribution
+      - Over 3 / Under 6 distribution
+      - Last digit streak detection
+      - Volatility filter (stddev of digits)
+    """
+    if len(ticks) < 30:
         return None
 
     last_digits = [int(str(t)[-1]) for t in ticks]
 
-    even_count = sum(1 for d in last_digits if d % 2 == 0)
+    even_count = sum(d % 2 == 0 for d in last_digits)
     odd_count = len(last_digits) - even_count
-    over3_count = sum(1 for d in last_digits if d > 3)
-    under6_count = sum(1 for d in last_digits if d < 6)
+    over3_count = sum(d > 3 for d in last_digits)
+    under6_count = sum(d < 6 for d in last_digits)
 
+    # streak detection (bias if last 5 digits lean one way)
+    last5 = last_digits[-5:]
+    streak_even = sum(d % 2 == 0 for d in last5) / 5
+    streak_over3 = sum(d > 3 for d in last5) / 5
+
+    # volatility filter (stddev of last 20 digits)
+    vol = statistics.pstdev(last_digits[-20:])
+
+    # weights
     strength = {
-        "Even": even_count / len(last_digits),
-        "Odd": odd_count / len(last_digits),
-        "Over 3": over3_count / len(last_digits),
-        "Under 6": under6_count / len(last_digits),
+        "Even": (even_count / len(last_digits) + streak_even * 0.4) / (1 + vol/10),
+        "Odd": (odd_count / len(last_digits) + (1-streak_even) * 0.4) / (1 + vol/10),
+        "Over 3": (over3_count / len(last_digits) + streak_over3 * 0.4) / (1 + vol/10),
+        "Under 6": (under6_count / len(last_digits) + (1-streak_over3) * 0.4) / (1 + vol/10),
     }
 
     best_signal = max(strength, key=strength.get)
@@ -98,12 +126,15 @@ def analyze_market(market: str, ticks: list):
 
 def fetch_and_analyze():
     """Pick the best market and send full signal cycle."""
-    best_market = None
-    best_signal = None
-    best_confidence = 0
+    global last_expired_id
+
+    # delete old expired before new cycle
+    delete_last_expired()
+
+    best_market, best_signal, best_confidence = None, None, 0
 
     for market in MARKETS:
-        if len(market_ticks[market]) > 10:
+        if len(market_ticks[market]) > 20:
             result = analyze_market(market, market_ticks[market])
             if result:
                 signal, confidence = result
@@ -129,21 +160,23 @@ def fetch_and_analyze():
             f"⚡ Get ready!"
         )
         send_telegram_message(pre_msg)
-        time.sleep(6)
+        time.sleep(30)
 
         # -------- MAIN SIGNAL --------
         entry_digit = int(str(market_ticks[best_market][-1])[-1]) if market_ticks[best_market] else None
+        extra_note = "\n\n🤖 Tip: Use the FREE <b>Over 3 Bot</b> in the Free Bots section!" if best_signal == "Over 3" else ""
         main_msg = (
             f"⚡ <b>KashyTrader Premium Signal</b>\n\n"
             f"⏰ Time: {entry_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"📊 Market: {market_name}\n"
             f"🎯 Signal: <b>{best_signal}</b>\n"
             f"🔢 Entry Point Digit: <b>{entry_digit}</b>\n"
-            f"📈 Confidence: <b>{best_confidence:.2%}</b>\n\n"
+            f"📈 Confidence: <b>{best_confidence:.2%}</b>\n"
+            f"{extra_note}\n\n"
             f"🔥 Execute now!"
         )
         send_telegram_message(main_msg)
-        time.sleep(90)  # wait 3 mins until expiration
+        time.sleep(90)  # 3 mins duration
 
         # -------- POST-NOTIFICATION --------
         post_msg = (
@@ -152,11 +185,11 @@ def fetch_and_analyze():
             f"🕒 Expired at: {expiry_time.strftime('%H:%M:%S')}\n\n"
             f"🔔 Next Signal Expected: {next_signal_time.strftime('%H:%M:%S')}"
         )
-        send_telegram_message(post_msg, keep=True)
+        last_expired_id = send_telegram_message(post_msg, keep=True)
 
         # -------- CLEANUP OLD MESSAGES --------
-        time.sleep(10)  # wait 30s after expiration
-        delete_messages()  # delete pre + main only
+        time.sleep(10)
+        delete_messages()
 
 
 def on_message(ws, message):
@@ -168,18 +201,16 @@ def on_message(ws, message):
         quote = data["tick"]["quote"]
 
         market_ticks[symbol].append(quote)
-        if len(market_ticks[symbol]) > 100:
+        if len(market_ticks[symbol]) > 200:
             market_ticks[symbol].pop(0)
 
 
 def subscribe_to_ticks(ws):
-    """Subscribe to tick streams for all markets."""
     for market in MARKETS:
         ws.send(json.dumps({"ticks": market}))
 
 
 def run_websocket():
-    """Run Deriv WebSocket client."""
     ws = websocket.WebSocketApp(
         DERIV_API_URL,
         on_message=on_message
@@ -189,16 +220,12 @@ def run_websocket():
 
 
 def schedule_signals():
-    """Send signals every 10 minutes."""
     while True:
         fetch_and_analyze()
-        time.sleep(60)  # 10 minutes
+        time.sleep(60)  # every 10 min
 
 
 if __name__ == "__main__":
-    # Start WebSocket thread
     ws_thread = threading.Thread(target=run_websocket)
     ws_thread.start()
-
-    # Start scheduled signal sender
     schedule_signals()
