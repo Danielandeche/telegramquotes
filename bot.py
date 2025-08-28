@@ -170,7 +170,6 @@ def fetch_and_analyze():
             f"🎯 Signal: <b>{best_signal}</b>\n"
             f"🔢 Entry Point Digit: <b>{entry_digit}</b>\n"
             f"📈 Confidence: <b>{best_confidence:.2%}</b>\n"
-            f"{extra_note}\n\n"
             f"🔥 Execute now!"
         )
         send_telegram_message(main_msg)
