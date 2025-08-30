@@ -33,9 +33,6 @@ market_ticks = {market: [] for market in MARKETS}
 active_messages = []
 last_expired_id = None
 
-# Track recovery state
-recovery_mode = False
-
 
 def send_telegram_message(message: str, image_path="logo.png", keep=False):
     """Send a message with logo and Run button."""
@@ -45,28 +42,16 @@ def send_telegram_message(message: str, image_path="logo.png", keep=False):
         ]]
     }
 
-    try:
-        with open(image_path, "rb") as img:
-            resp = requests.post(
-                f"{BASE_URL}/sendPhoto",
-                data={
-                    "chat_id": GROUP_ID,
-                    "caption": message,
-                    "parse_mode": "HTML",
-                    "reply_markup": json.dumps(keyboard),
-                },
-                files={"photo": img}
-            )
-    except FileNotFoundError:
-        # fallback if no logo.png
+    with open(image_path, "rb") as img:
         resp = requests.post(
-            f"{BASE_URL}/sendMessage",
+            f"{BASE_URL}/sendPhoto",
             data={
                 "chat_id": GROUP_ID,
-                "text": message,
+                "caption": message,
                 "parse_mode": "HTML",
                 "reply_markup": json.dumps(keyboard),
-            }
+            },
+            files={"photo": img}
         )
 
     if resp.ok:
@@ -78,7 +63,7 @@ def send_telegram_message(message: str, image_path="logo.png", keep=False):
 
 
 def delete_messages():
-    """Delete previous messages."""
+    """Delete pre+main messages from last cycle."""
     global active_messages
     for msg_id in active_messages:
         requests.post(f"{BASE_URL}/deleteMessage", data={
@@ -89,7 +74,7 @@ def delete_messages():
 
 
 def delete_last_expired():
-    """Delete last expired message before sending new cycle."""
+    """Delete last expired message before sending a new cycle."""
     global last_expired_id
     if last_expired_id:
         requests.post(f"{BASE_URL}/deleteMessage", data={
@@ -101,105 +86,105 @@ def delete_last_expired():
 
 def analyze_market(market: str, ticks: list):
     """
-    Focus only on:
-      - Under 8 primary trade
-      - Recovery with Under 5 if first fails
+    Improved analysis:
+      - Even / Odd distribution
+      - Over 3 / Under 6 distribution
+      - Last digit streak detection
+      - Volatility filter (stddev of digits)
     """
     if len(ticks) < 30:
         return None
 
     last_digits = [int(str(t)[-1]) for t in ticks]
 
-    # probability checks
-    under8_count = sum(d < 8 for d in last_digits)
-    under5_count = sum(d < 5 for d in last_digits)
+    even_count = sum(d % 2 == 0 for d in last_digits)
+    odd_count = len(last_digits) - even_count
+    over3_count = sum(d > 3 for d in last_digits)
+    under6_count = sum(d < 6 for d in last_digits)
 
-    # recent streak check (last 5 digits)
+    # streak detection (bias if last 5 digits lean one way)
     last5 = last_digits[-5:]
-    streak_under8 = sum(d < 8 for d in last5) / 5
-    streak_under5 = sum(d < 5 for d in last5) / 5
+    streak_even = sum(d % 2 == 0 for d in last5) / 5
+    streak_over3 = sum(d > 3 for d in last5) / 5
 
-    # volatility filter
+    # volatility filter (stddev of last 20 digits)
     vol = statistics.pstdev(last_digits[-20:])
 
-    # Calculate strengths
+    # weights
     strength = {
-        "Under 8": (under8_count / len(last_digits) + streak_under8 * 0.4) / (1 + vol / 10),
-        "Under 5": (under5_count / len(last_digits) + streak_under5 * 0.4) / (1 + vol / 10),
+        "Even": (even_count / len(last_digits) + streak_even * 0.4) / (1 + vol/10),
+        "Odd": (odd_count / len(last_digits) + (1-streak_even) * 0.4) / (1 + vol/10),
+        "Over 3": (over3_count / len(last_digits) + streak_over3 * 0.4) / (1 + vol/10),
+        "Under 6": (under6_count / len(last_digits) + (1-streak_over3) * 0.4) / (1 + vol/10),
     }
 
-    return strength
+    best_signal = max(strength, key=strength.get)
+    confidence = strength[best_signal]
+
+    return best_signal, confidence
 
 
 def fetch_and_analyze():
-    """Pick only markets with Under 8 opportunity, else recovery with Under 5."""
-    global last_expired_id, recovery_mode
+    """Pick the best market and send full signal cycle."""
+    global last_expired_id
 
+    # delete old expired before new cycle
     delete_last_expired()
+
     best_market, best_signal, best_confidence = None, None, 0
 
     for market in MARKETS:
         if len(market_ticks[market]) > 20:
-            strength = analyze_market(market, market_ticks[market])
-            if strength:
-                if not recovery_mode:  # Primary Under 8 mode
-                    signal = "Under 8"
-                    confidence = strength["Under 8"]
-                else:  # Recovery Under 5 mode
-                    signal = "Under 5"
-                    confidence = strength["Under 5"]
-
+            result = analyze_market(market, market_ticks[market])
+            if result:
+                signal, confidence = result
                 if confidence > best_confidence:
                     best_confidence = confidence
                     best_signal = signal
                     best_market = market
 
-    if best_market and best_signal:
+    if best_market:
         now = datetime.now()
+        entry_time = now + timedelta(minutes=1)
+        expiry_time = now + timedelta(minutes=4)
+        next_signal_time = now + timedelta(minutes=10)
+
         market_name = MARKET_NAMES.get(best_market, best_market)
-        entry_digit = int(str(market_ticks[best_market][-1])[-1]) if market_ticks[best_market] else None
+
+        # -------- PRE-NOTIFICATION --------
+        pre_msg = (
+             f"📢 <b>Upcoming Signal Alert</b>\n\n"
+             f"⏰ Entry at <b>{(now + timedelta(minutes=1)).strftime('%H:%M:%S')}</b>\n\n"
+             f"⚡ Get ready!"
+        )
+        send_telegram_message(pre_msg)
+        time.sleep(60)
 
         # -------- MAIN SIGNAL --------
+        entry_digit = int(str(market_ticks[best_market][-1])[-1]) if market_ticks[best_market] else None
+        extra_note = "\n\n🤖 Tip: Use the FREE <b>Over 3 Bot</b> in the Free Bots section!" if best_signal == "Over 3" else ""
         main_msg = (
             f"⚡ <b>KashyTrader Premium Signal</b>\n\n"
+           f"⏰ Time: {now.strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"📊 Market: {market_name}\n"
             f"🎯 Signal: <b>{best_signal}</b>\n"
             f"🔢 Entry Point Digit: <b>{entry_digit}</b>\n"
             f"📈 Confidence: <b>{best_confidence:.2%}</b>\n"
-            f"🔥 Mode: {'Primary Under 8' if not recovery_mode else 'Recovery Under 5'}"
+            f"🔥 Execute now!"
         )
         send_telegram_message(main_msg)
+        time.sleep(180)  # 3 mins duration
 
-        # Simulate expiry after 3 mins
-        time.sleep(180)
-
-        # -------- RESULT SIMULATION (replace with real win/loss if integrated with trading API) --------
-        outcome = "win" if entry_digit < (8 if not recovery_mode else 5) else "loss"
-
-        if outcome == "win":
-            post_msg = (
-                f"✅ <b>Trade Won</b>\n\n"
-                f"📊 Market: {market_name}\n"
-                f"🎯 Signal: {best_signal}\n"
-                f"🔢 Last Digit: {entry_digit}\n"
-                f"📌 Confidence: {best_confidence:.2%}\n\n"
-                f"🎉 Cycle Complete!"
-            )
-            recovery_mode = False  # reset
-        else:
-            post_msg = (
-                f"❌ <b>Trade Lost</b>\n\n"
-                f"📊 Market: {market_name}\n"
-                f"🎯 Signal: {best_signal}\n"
-                f"🔢 Last Digit: {entry_digit}\n"
-                f"📌 Confidence: {best_confidence:.2%}\n\n"
-                f"⚠️ Entering Recovery Mode: Next trade will be <b>Under 5</b>"
-            )
-            recovery_mode = True  # enable recovery for next cycle
-
+        # -------- POST-NOTIFICATION --------
+        post_msg = (
+            f"✅ <b>Signal Expired</b>\n\n"
+            f"📊 Market: {market_name}\n"
+             f"🕒 Expired at: {now.strftime('%H:%M:%S')}\n\n"
+            f"🔔 Next Signal Expected: {next_signal_time.strftime('%H:%M:%S')}"
+        )
         last_expired_id = send_telegram_message(post_msg, keep=True)
 
-        # Cleanup old messages
+        # -------- CLEANUP OLD MESSAGES --------
         time.sleep(30)
         delete_messages()
 
@@ -234,7 +219,7 @@ def run_websocket():
 def schedule_signals():
     while True:
         fetch_and_analyze()
-        time.sleep(60)  # check every minute
+        time.sleep(60)  # every 10 min
 
 
 if __name__ == "__main__":
