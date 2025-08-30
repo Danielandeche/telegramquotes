@@ -171,6 +171,7 @@ def fetch_and_analyze():
             f"🔢 Entry Point Digit: <b>{entry_digit}</b>\n"
             f"📈 Confidence: <b>{best_confidence:.2%}</b>\n"
             f"🔥 Execute now!"
+            f" <b>Always remember to use risk management at all times</b>\n\n"
         )
         send_telegram_message(main_msg)
         time.sleep(180)  # 3 mins duration
