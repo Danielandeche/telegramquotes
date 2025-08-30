@@ -174,7 +174,7 @@ def fetch_and_analyze():
         extra_note = "\n\n🤖 Tip: Use the FREE <b>Over 3 Bot</b> in the Free Bots section!" if best_signal == "Over 3" else ""
         main_msg = (
             f"⚡ <b>KashyTrader Premium Signal</b>\n\n"
-           f"⏰ Time: {now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+           f"⏰ Time: {now = datetime.now('%H:%M:%S')}\n"
             f"📊 Market: {market_name}\n"
             f"🎯 Signal: <b>{best_signal}</b>\n"
             f"🔢 Entry Point Digit: <b>{entry_digit}</b>\n"
@@ -189,7 +189,7 @@ def fetch_and_analyze():
         post_msg = (
             f"✅ <b>Signal Expired</b>\n\n"
             f"📊 Market: {market_name}\n"
-             f"🕒 Expired at: {now.strftime('%H:%M:%S')}\n\n"
+             f"🕒 Expired at: {now = datetime.now('%H:%M:%S')}\n\n"
             f"🔔 Next Signal Expected: {next_signal_time.strftime('%H:%M:%S')}"
         )
         last_expired_id = send_telegram_message(post_msg, keep=True)
