@@ -61,8 +61,3 @@ def signal_cycle():
 
         # Wait 28 more minutes (total 30 min cycle)
         time.sleep(1680)
-
-# Run bot in background
-if __name__ == "__main__":
-    send_message("🚀 Deriv Signal Bot Started...\nSignals will be sent every 30 minutes.")
-    signal_cycle()
