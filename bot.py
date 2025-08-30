@@ -15,7 +15,11 @@ BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
 DERIV_API_URL = "wss://ws.binaryws.com/websockets/v3?app_id=1089"
 
 # Markets to analyze
-MARKETS = ["R_10", "R_25", "R_50", "R_75", "R_100"]
+# Markets to analyze
+MARKETS = [
+    "R_10", "R_25", "R_50", "R_75", "R_100",      # Standard Volatility Indices
+    "R_10_1S", "R_25_1S", "R_50_1S", "R_75_1S", "R_100_1S"  # 1-second Volatility Indices
+]
 
 # Market symbol to name mapping
 MARKET_NAMES = {
@@ -24,6 +28,11 @@ MARKET_NAMES = {
     "R_50": "Volatility 50 Index",
     "R_75": "Volatility 75 Index",
     "R_100": "Volatility 100 Index",
+    "R_10_1S": "Volatility 10 (1s) Index",
+    "R_25_1S": "Volatility 25 (1s) Index",
+    "R_50_1S": "Volatility 50 (1s) Index",
+    "R_75_1S": "Volatility 75 (1s) Index",
+    "R_100_1S": "Volatility 100 (1s) Index",
 }
 
 # Store last 200 ticks for analysis
