@@ -174,7 +174,7 @@ def fetch_and_analyze():
             f" <b>Always remember to use risk management at all times</b>\n\n"
         )
         send_telegram_message(main_msg)
-        time.sleep(180)  # 3 mins duration
+        time.sleep(600)  # 3 mins duration
 
         # -------- POST-NOTIFICATION --------
         post_msg = (
