@@ -3,13 +3,12 @@ import requests
 import websocket
 import json
 from datetime import datetime, timedelta
-import schedule
 
 # ========================
 # Telegram Config
 # ========================
-TOKEN = "8225529337:AAFYdTwJVTTLC1RvwiYrkzI9jcV-VpCiADM"  # Replace with your bot token
-GROUP_ID = -1002776818122  # Replace with your group/chat id
+TOKEN = "8256982239:AAFZLRbcmRVgO1SiWOBqU7Hf00z6VU6nB64"  # Replace with your bot token
+GROUP_ID = -1002810133474  # Replace with your group/chat id
 TELEGRAM_API = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
 # ========================
@@ -115,7 +114,6 @@ def send_reminder():
         return
 
     symbol, signal, entry_digit, prob = best_signal
-    entry_time = (datetime.utcnow() + timedelta(minutes=2)).strftime('%H:%M:%S')
     send_message(
         f"⏰ *Signal Reminder*\n\n"
         f"Signal in 2 minutes!\n"
@@ -146,15 +144,25 @@ def send_signal():
     )
 
 # ========================
-# Scheduler
+# Custom Scheduler (No `schedule`)
 # ========================
 def run_scheduler():
-    schedule.every().hour.at(":58").do(send_reminder)   # Reminder 2 mins before
-    schedule.every().hour.at(":00").do(send_signal)     # Signal at top of hour
-
     while True:
-        schedule.run_pending()
-        time.sleep(1)
+        now = datetime.utcnow()
+        minute = now.minute
+        second = now.second
+
+        # Reminder at HH:58:00
+        if minute == 58 and second == 0:
+            send_reminder()
+            time.sleep(1)
+
+        # Signal at HH:00:00
+        if minute == 0 and second == 0:
+            send_signal()
+            time.sleep(1)
+
+        time.sleep(0.5)  # check clock twice per second
 
 # ========================
 # Start
