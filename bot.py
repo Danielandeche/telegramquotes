@@ -12,7 +12,7 @@ import time
 import json
 import logging
 import threading
-from collections import deque, defaultdict
+from collections import deque
 from datetime import datetime, timedelta
 import pytz
 import requests
@@ -53,11 +53,8 @@ market_ticks = {m: deque(maxlen=MAX_TICKS) for m in MARKETS}
 latest_epoch = None  # last tick epoch (UTC seconds)
 state_lock = threading.Lock()
 
-# Per-slot send tracking and message tracking.
-# sent_state maps slot_epoch -> {"presignal": bool, "main": bool, "expiry": bool}
-sent_state = defaultdict(lambda: {"presignal": False, "main": False, "expiry": False})
-# tracked_messages maps slot_epoch -> {"presignal": [msgids], "main": [msgids]}
-tracked_messages = defaultdict(lambda: {"presignal": [], "main": []})
+# Track message ids (pre + main) so we can delete them on expiry
+tracked_message_ids = []
 
 
 # ---------------- Telegram helpers ----------------
@@ -84,6 +81,8 @@ def send_photo_with_button(caption: str, keep: bool = False) -> Optional[int]:
         if resp.ok:
             mid = resp.json().get("result", {}).get("message_id")
             logging.info(f"sendPhoto OK message_id={mid}")
+            if mid and not keep:
+                tracked_message_ids.append(mid)
             return mid
         else:
             logging.warning(f"sendPhoto failed: {resp.status_code} {resp.text}")
@@ -97,7 +96,6 @@ def send_photo_with_button(caption: str, keep: bool = False) -> Optional[int]:
 def send_message_with_button(text: str, keep: bool = False) -> Optional[int]:
     """Send text message with inline keyboard (fallback)."""
     try:
-        # reply_markup must be JSON-serializable; Telegram accepts either string or JSON object.
         resp = requests.post(
             f"{BASE_TELEGRAM}/sendMessage",
             json={
@@ -111,6 +109,8 @@ def send_message_with_button(text: str, keep: bool = False) -> Optional[int]:
         if resp.ok:
             mid = resp.json().get("result", {}).get("message_id")
             logging.info(f"sendMessage OK message_id={mid}")
+            if mid and not keep:
+                tracked_message_ids.append(mid)
             return mid
         else:
             logging.error(f"sendMessage failed: {resp.status_code} {resp.text}")
@@ -130,28 +130,23 @@ def send_telegram(caption: str, keep: bool = False) -> Optional[int]:
     return send_message_with_button(caption, keep=keep)
 
 
-def delete_messages_for_slot(slot_epoch: int):
-    """Delete tracked pre/main messages for a specific slot (best-effort)."""
-    with state_lock:
-        msgs = tracked_messages.get(slot_epoch, {"presignal": [], "main": []})
-        # Clear tracked list whether deletion succeeded or not to avoid repeat attempts
-        tracked_messages.pop(slot_epoch, None)
-        sent_state.pop(slot_epoch, None)
-
-    for typ in ("presignal", "main"):
-        for mid in list(msgs.get(typ, [])):
-            try:
-                resp = requests.post(
-                    f"{BASE_TELEGRAM}/deleteMessage",
-                    json={"chat_id": CHAT_ID, "message_id": mid},
-                    timeout=10,
-                )
-                if resp.ok:
-                    logging.info(f"Deleted message {mid} (slot {slot_epoch} / {typ})")
-                else:
-                    logging.warning(f"Failed to delete {mid}: {resp.status_code} {resp.text}")
-            except Exception:
-                logging.exception(f"Exception deleting message {mid}")
+def delete_tracked_messages():
+    """Delete tracked pre/main messages (best-effort)."""
+    global tracked_message_ids
+    for mid in list(tracked_message_ids):
+        try:
+            resp = requests.post(
+                f"{BASE_TELEGRAM}/deleteMessage",
+                json={"chat_id": CHAT_ID, "message_id": mid},
+                timeout=10,
+            )
+            if resp.ok:
+                logging.info(f"Deleted message {mid}")
+            else:
+                logging.warning(f"Failed to delete {mid}: {resp.status_code} {resp.text}")
+        except Exception:
+            logging.exception(f"Exception deleting message {mid}")
+    tracked_message_ids = []
 
 
 # ---------------- Utilities & Analysis ----------------
@@ -274,16 +269,21 @@ def run_websocket_forever():
             time.sleep(3)
 
 
-# ---------------- Scheduler (reworked) ----------------
+# ---------------- Scheduler ----------------
 def scheduler_loop():
     """
     Schedules:
     - presignal at slot - 2 minutes
     - main at slot
     - expiry at slot + 5 minutes
-
-    Uses latest_epoch (UTC seconds from ticks).
+    Uses latest_epoch (UTC seconds from ticks), converts to Nairobi for display.
     """
+    presignal_sent = False
+    main_sent = False
+    expiry_sent = False
+    candidate = None
+    current_slot_epoch = None
+
     while True:
         with state_lock:
             epoch = latest_epoch
@@ -293,94 +293,96 @@ def scheduler_loop():
             time.sleep(0.8)
             continue
 
-        # Compute next 10-minute slot in UTC as exact multiple of 600s
-        # slot_epoch is the epoch for the start of the next 10-minute slot (UTC)
-        slot_epoch = ((epoch // 600) + 1) * 600
+        now_utc = datetime.fromtimestamp(epoch, tz=pytz.UTC)
+        now_na = now_utc.astimezone(NAIROBI_TZ)
+
+        # find next 10-min slot (ceiling)
+        bucket_min = (now_na.minute // 10) * 10
+        slot_na = now_na.replace(minute=bucket_min, second=0, microsecond=0)
+        if now_na >= slot_na:
+            slot_na = slot_na + timedelta(minutes=10)
+
+        slot_utc = slot_na.astimezone(pytz.UTC)
+        slot_epoch = int(slot_utc.timestamp())
         presignal_epoch = slot_epoch - 120
         expiry_epoch = slot_epoch + 300
 
-        # For readable logs and message text we show Nairobi times
-        slot_na = datetime.fromtimestamp(slot_epoch, tz=pytz.UTC).astimezone(NAIROBI_TZ)
-        expiry_na = datetime.fromtimestamp(expiry_epoch, tz=pytz.UTC).astimezone(NAIROBI_TZ)
+        # reset flags when slot advances
+        if current_slot_epoch != slot_epoch:
+            logging.info(f"Upcoming slot (Nairobi): {slot_na.strftime('%Y-%m-%d %H:%M:%S')}")
+            current_slot_epoch = slot_epoch
+            presignal_sent = False
+            main_sent = False
+            expiry_sent = False
+            candidate = None
 
-        # PRESIGNAL: send once when epoch is >= presignal_epoch and < slot_epoch
-        with state_lock:
-            slot_state = sent_state[slot_epoch]
-
-            if (not slot_state["presignal"]) and (presignal_epoch <= epoch < slot_epoch):
-                logging.info(f"PRESIGNAL window for slot {slot_na.strftime('%Y-%m-%d %H:%M:%S')} — running analysis")
-                candidate = pick_best_market_strategy()
-                if candidate:
-                    pres_text = (
-                        f"📢 <b>Upcoming Signal Reminder</b>\n\n"
-                        f"⏰ <b>Entry in 2 minutes</b>\n"
-                        f"📊 Market: <b>{candidate['market_name']}</b>\n"
-                        f"🎯 Strategy: <b>{candidate['strategy']}</b>\n"
-                        f"🔢 Candidate Entry Digit: <b>{candidate['best_digit']}</b>\n"
-                        f"📈 Confidence: <b>{candidate['confidence']:.2%}</b> ({candidate['count']}/{candidate['total']})\n"
-                        f"🕒 Entry Time (Nairobi): {slot_na.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-                        f"⚡ Get ready!"
-                    )
-                else:
-                    pres_text = (
-                        f"📢 <b>Upcoming Signal Reminder</b>\n\n"
-                        f"⏰ Entry in 2 minutes\n"
-                        f"⚠️ Not enough data to produce a reliable signal right now.\n"
-                        f"🕒 Entry Time (Nairobi): {slot_na.strftime('%Y-%m-%d %H:%M:%S')}"
-                    )
-
-                mid = send_telegram(pres_text, keep=False)
-                if mid:
-                    tracked_messages[slot_epoch]["presignal"].append(mid)
-                slot_state["presignal"] = True
-
-            # MAIN: send once when epoch >= slot_epoch
-            if (not slot_state["main"]) and (epoch >= slot_epoch):
-                logging.info(f"MAIN slot reached for {slot_na.strftime('%Y-%m-%d %H:%M:%S')} — sending main signal")
-                # pick candidate if none from presignal
-                candidate = pick_best_market_strategy()
-                if candidate:
-                    main_text = (
-                        f"⚡ <b>Main Signal</b>\n\n"
-                        f"📊 Market: <b>{candidate['market_name']}</b>\n"
-                        f"🎯 Strategy: <b>{candidate['strategy']}</b>\n"
-                        f"🔢 Entry Point Digit: <b>{candidate['best_digit']}</b>\n"
-                        f"📈 Confidence: <b>{candidate['confidence']:.2%}</b> ({candidate['count']}/{candidate['total']})\n"
-                        f"🕒 Time (Nairobi): {slot_na.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                        f"⏳ Expires: {expiry_na.strftime('%Y-%m-%d %H:%M:%S')} (Nairobi)\n\n"
-                        f"🔥 Execute now!"
-                    )
-                else:
-                    main_text = (
-                        f"⚡ <b>Main Signal</b>\n\n"
-                        f"⚠️ Not enough data for a reliable signal.\n"
-                        f"🕒 Time (Nairobi): {slot_na.strftime('%Y-%m-%d %H:%M:%S')}"
-                    )
-
-                mid = send_telegram(main_text, keep=False)
-                if mid:
-                    tracked_messages[slot_epoch]["main"].append(mid)
-                slot_state["main"] = True
-
-            # EXPIRY: send once when epoch >= expiry_epoch
-            if (not slot_state["expiry"]) and (epoch >= expiry_epoch):
-                logging.info(f"EXPIRY for slot {slot_na.strftime('%Y-%m-%d %H:%M:%S')} — sending expiry message and deleting pre+main")
-                next_slot_na = (slot_na + timedelta(minutes=10))
-                expiry_text = (
-                    f"✅ <b>Signal Expired</b>\n\n"
-                    f"🕒 Expired at: {expiry_na.strftime('%Y-%m-%d %H:%M:%S')} (Nairobi)\n"
-                    f"🔔 Next expected slot: {next_slot_na.strftime('%Y-%m-%d %H:%M:%S')} (Nairobi)"
+        # PRESIGNAL
+        if (not presignal_sent) and (epoch >= presignal_epoch) and (epoch < slot_epoch):
+            logging.info("PRESIGNAL window — running analysis")
+            candidate = pick_best_market_strategy()
+            if candidate:
+                pres_text = (
+                    f"📢 <b>Upcoming Signal Reminder</b>\n\n"
+                    f"⏰ <b>Entry in 2 minutes</b>\n"
+                    f"📊 Market: <b>{candidate['market_name']}</b>\n"
+                    f"🎯 Strategy: <b>{candidate['strategy']}</b>\n"
+                    f"🔢 Candidate Entry Digit: <b>{candidate['best_digit']}</b>\n"
+                    f"📈 Confidence: <b>{candidate['confidence']:.2%}</b> ({candidate['count']}/{candidate['total']})\n"
+                    f"🕒 Entry Time (Nairobi): {slot_na.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                    f"⚡ Get ready!"
                 )
-                # expiry message we keep (do not track for deletion) so set keep=True
-                send_telegram(expiry_text, keep=True)
-                # delete tracked pre/main for this slot
-                # do deletion without holding state_lock to avoid deadlocks with network IO
-                slot_state["expiry"] = True
+            else:
+                pres_text = (
+                    f"📢 <b>Upcoming Signal Reminder</b>\n\n"
+                    f"⏰ Entry in 2 minutes\n"
+                    f"⚠️ Not enough data to produce a reliable signal right now.\n"
+                    f"🕒 Entry Time (Nairobi): {slot_na.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+            send_telegram(pres_text, keep=False)
+            presignal_sent = True
 
-        # delete messages for the slot outside the lock (we popped the state inside)
-        # (deletion will only attempt to remove tracked messages for the slot; safe if empty)
-        if epoch >= expiry_epoch:
-            delete_messages_for_slot(slot_epoch)
+        # MAIN
+        if (not main_sent) and (epoch >= slot_epoch):
+            logging.info("MAIN slot reached — sending main signal")
+            # Re-run analysis if no candidate was found during pre-signal
+            if candidate is None:
+                candidate = pick_best_market_strategy()
+            if candidate:
+                expiry_na = datetime.fromtimestamp(expiry_epoch, tz=pytz.UTC).astimezone(NAIROBI_TZ)
+                main_text = (
+                    f"⚡ <b>Main Signal</b>\n\n"
+                    f"📊 Market: <b>{candidate['market_name']}</b>\n"
+                    f"🎯 Strategy: <b>{candidate['strategy']}</b>\n"
+                    f"🔢 Entry Point Digit: <b>{candidate['best_digit']}</b>\n"
+                    f"📈 Confidence: <b>{candidate['confidence']:.2%}</b> ({candidate['count']}/{candidate['total']})\n"
+                    f"🕒 Time (Nairobi): {slot_na.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    f"⏳ Expires: {expiry_na.strftime('%Y-%m-%d %H:%M:%S')} (Nairobi)\n\n"
+                    f"🔥 Execute now!"
+                )
+            else:
+                expiry_na = datetime.fromtimestamp(expiry_epoch, tz=pytz.UTC).astimezone(NAIROBI_TZ)
+                main_text = (
+                    f"⚡ <b>Main Signal</b>\n\n"
+                    f"⚠️ Not enough data for a reliable signal.\n"
+                    f"🕒 Time (Nairobi): {slot_na.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    f"⏳ Expires: {expiry_na.strftime('%Y-%m-%d %H:%M:%S')} (Nairobi)"
+                )
+            send_telegram(main_text, keep=False)
+            main_sent = True
+
+        # EXPIRY
+        if (not expiry_sent) and (epoch >= expiry_epoch):
+            logging.info("EXPIRY — sending expiry message and deleting pre+main")
+            expiry_na = datetime.fromtimestamp(expiry_epoch, tz=pytz.UTC).astimezone(NAIROBI_TZ)
+            next_slot_na = (slot_na + timedelta(minutes=10))
+            expiry_text = (
+                f"✅ <b>Signal Expired</b>\n\n"
+                f"🕒 Expired at: {expiry_na.strftime('%Y-%m-%d %H:%M:%S')} (Nairobi)\n"
+                f"🔔 Next expected slot: {next_slot_na.strftime('%Y-%m-%d %H:%M:%S')} (Nairobi)"
+            )
+            send_telegram(expiry_text, keep=True)
+            delete_tracked_messages()
+            expiry_sent = True
 
         time.sleep(0.6)
 
@@ -396,10 +398,5 @@ if __name__ == "__main__":
         scheduler_loop()
     except KeyboardInterrupt:
         logging.info("KeyboardInterrupt — cleaning up")
-        # best-effort delete remaining tracked messages
-        # delete all tracked slots
-        with state_lock:
-            slots = list(tracked_messages.keys())
-        for s in slots:
-            delete_messages_for_slot(s)
+        delete_tracked_messages()
         time.sleep(0.5)
