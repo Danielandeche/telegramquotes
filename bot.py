@@ -36,7 +36,7 @@ def send_telegram_message(message: str, image_path="logo.png", keep=False):
     """Send a message with logo and Run button."""
     keyboard = {
         "inline_keyboard": [[
-            {"text": "🚀 Run on KashyTrader", "url": "https://www.kashytrader.site/"}
+            {"text": "🚀 Run on DBTraders", "url": "https://www.dbtraders.com/"}
         ]]
     }
 
@@ -138,10 +138,10 @@ def fetch_and_analyze():
 
     # -------- MAIN SIGNAL --------
     main_msg = (
-        f"⚡ <b>KashyTrader Premium Signal</b>\n\n"
+        f"⚡ <b>DBTraders Premium Signal</b>\n\n"
         f"📊 Market: {market_name}\n"
         f"🎯 Strategy: Over 3 / Under 6\n"
-        f"🔢 Best Preceding Digit: <b>{best_digit}</b>\n"
+        f"🔢 Entry Digit: <b>{best_digit}</b>\n"
         f"📈 Confidence: <b>{best_confidence:.2%}</b>\n\n"
         f"🔥 Execute now!"
     )
